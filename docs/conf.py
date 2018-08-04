@@ -35,6 +35,7 @@ extensions = [
     'sphinx.ext.viewcode',
     'alabaster',
     'sphinx_issues',
+    'versionwarning',
 ]
 
 primary_domain = 'py'
@@ -99,3 +100,21 @@ html_sidebars = {
     '**': ['about.html', 'useful-links.html',
            'localtoc.html', 'relations.html', 'searchbox.html']
 }
+
+# sphinx-version-warning config
+# Show warning at top of page
+versionwarning_body_default_selector = versionwarning_body_extra_selector =  'div.document'
+versionwarning_messages = {
+    'stable': 'This document is for the latest stable release. For the 3.0 pre-release documentation, see `here </en/3.0/>`_.',
+    '2.x-line': 'This document is for the latest 2.x (stable) release. For the 3.0 pre-release documentation, see `here </en/3.0/>`_.',
+    'latest': "This document is for marshmallow's development version. For the 2.x documentation, see `here </en/2.x-line/>`_.",
+    '3.0': 'This document is for the latest 3.0 pre-release. For the 2.x documentation, see `here </en/2.x-line/>`_.',
+    # TEMPORARY
+    '2.x-line-versionwarning': 'This document is for the latest 2.x (stable) release. For the 3.0 pre-release documentation, see `here </en/3.0/>`_.',
+}
+# For debugging locally
+# versionwarning_project_version = '2.x-line'
+
+# https://docs.readthedocs.io/en/latest/guides/adding-custom-css.html
+def setup(app):
+    app.add_stylesheet('css/versionwarning.css')
