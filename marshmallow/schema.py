@@ -3,6 +3,9 @@
 from __future__ import absolute_import, unicode_literals
 
 from collections import defaultdict, OrderedDict
+import datetime as dt
+import uuid
+import decimal
 import functools
 import copy
 import inspect
@@ -10,7 +13,7 @@ import json
 import warnings
 
 from marshmallow import base, fields, utils, class_registry, marshalling
-from marshmallow.compat import iteritems, iterkeys, with_metaclass
+from marshmallow.compat import iteritems, iterkeys, with_metaclass, text_type, binary_type
 from marshmallow.exceptions import ValidationError, StringNotCollectionError
 from marshmallow.orderedset import OrderedSet
 from marshmallow.decorators import (
@@ -246,8 +249,6 @@ class BaseSchema(base.SchemaABC):
         when instantiating the Schema. If a field appears in both `only` and
         `exclude`, it is not used. Nested fields can be represented with dot
         delimiters.
-    :param str prefix: Optional prefix that will be prepended to all the
-        serialized field names.
     :param bool many: Should be set to `True` if ``obj`` is a collection
         so that the object will be serialized to a list.
     :param dict context: Optional context passed to :class:`fields.Method` and
@@ -260,13 +261,33 @@ class BaseSchema(base.SchemaABC):
     :param unknown: Whether to exclude, include, or raise an error for unknown
         fields in the data. Use `EXCLUDE`, `INCLUDE` or `RAISE`.
 
+    .. versionchanged:: 3.0.0
+        `prefix` parameter removed.
+
     .. versionchanged:: 2.0.0
         `__validators__`, `__preprocessors__`, and `__data_handlers__` are removed in favor of
         `marshmallow.decorators.validates_schema`,
         `marshmallow.decorators.pre_load` and `marshmallow.decorators.post_dump`.
         `__accessor__` and `__error_handler__` are deprecated. Implement the
         `handle_error` and `get_attribute` methods instead.
-        """
+    """
+    TYPE_MAPPING = {
+        text_type: fields.String,
+        binary_type: fields.String,
+        dt.datetime: fields.DateTime,
+        float: fields.Float,
+        bool: fields.Boolean,
+        tuple: fields.Raw,
+        list: fields.Raw,
+        set: fields.Raw,
+        int: fields.Integer,
+        uuid.UUID: fields.UUID,
+        dt.time: fields.Time,
+        dt.date: fields.Date,
+        dt.timedelta: fields.TimeDelta,
+        decimal.Decimal: fields.Decimal,
+    }
+
     OPTIONS_CLASS = SchemaOpts
 
     class Meta(object):
@@ -307,9 +328,8 @@ class BaseSchema(base.SchemaABC):
         pass
 
     def __init__(
-        self, only=None, exclude=(), prefix='', many=False,
-        context=None, load_only=(), dump_only=(), partial=False,
-        unknown=None,
+        self, only=None, exclude=(), many=False, context=None,
+        load_only=(), dump_only=(), partial=False, unknown=None,
     ):
         # Raise error if only or exclude is passed as string, not list of strings
         if only is not None and not is_collection(only):
@@ -321,7 +341,6 @@ class BaseSchema(base.SchemaABC):
         self.many = many
         self.only = only
         self.exclude = exclude
-        self.prefix = prefix
         self.ordered = self.opts.ordered
         self.load_only = set(load_only) or set(self.opts.load_only)
         self.dump_only = set(dump_only) or set(self.opts.dump_only)
@@ -386,7 +405,7 @@ class BaseSchema(base.SchemaABC):
             if ``obj`` is invalid.
         """
         # Callable marshalling object
-        marshal = marshalling.Marshaller(prefix=self.prefix)
+        marshal = marshalling.Marshaller()
         errors = {}
         many = self.many if many is None else bool(many)
         if many and utils.is_iterable_but_not_string(obj):
@@ -407,18 +426,15 @@ class BaseSchema(base.SchemaABC):
             processed_obj = obj
 
         if not errors:
-            try:
-                result = marshal(
-                    processed_obj,
-                    self.fields,
-                    many=many,
-                    accessor=self.get_attribute,
-                    dict_class=self.dict_class,
-                    index_errors=self.opts.index_errors,
-                )
-            except ValidationError as error:
-                errors = marshal.errors
-                result = error.data
+            result = marshal(
+                processed_obj,
+                self.fields,
+                many=many,
+                accessor=self.get_attribute,
+                dict_class=self.dict_class,
+                index_errors=self.opts.index_errors,
+            )
+            errors = marshal.errors
 
         if not errors and self._has_processors(POST_DUMP):
             try:
@@ -433,7 +449,6 @@ class BaseSchema(base.SchemaABC):
         if errors:
             exc = ValidationError(
                 errors,
-                field_names=marshal.error_field_names,
                 data=obj,
                 valid_data=result,
                 **marshal.error_kwargs
@@ -471,6 +486,7 @@ class BaseSchema(base.SchemaABC):
         :param bool|tuple partial: Whether to ignore missing fields. If `None`,
             the value for `self.partial` is used. If its value is an iterable,
             only missing fields listed in that iterable will be ignored.
+            Use dot delimiters to specify nested fields.
         :param unknown: Whether to exclude, include, or raise an error for unknown
             fields in the data. Use `EXCLUDE`, `INCLUDE` or `RAISE`.
             If `None`, the value for `self.unknown` is used.
@@ -500,6 +516,7 @@ class BaseSchema(base.SchemaABC):
         :param bool|tuple partial: Whether to ignore missing fields. If `None`,
             the value for `self.partial` is used. If its value is an iterable,
             only missing fields listed in that iterable will be ignored.
+            Use dot delimiters to specify nested fields.
         :param unknown: Whether to exclude, include, or raise an error for unknown
             fields in the data. Use `EXCLUDE`, `INCLUDE` or `RAISE`.
             If `None`, the value for `self.unknown` is used.
@@ -525,6 +542,7 @@ class BaseSchema(base.SchemaABC):
         :param bool|tuple partial: Whether to ignore missing fields. If `None`,
             the value for `self.partial` is used. If its value is an iterable,
             only missing fields listed in that iterable will be ignored.
+            Use dot delimiters to specify nested fields.
         :return: A dictionary of validation errors.
         :rtype: dict
 
@@ -565,6 +583,7 @@ class BaseSchema(base.SchemaABC):
         unknown = unknown or self.unknown
         if partial is None:
             partial = self.partial
+        # Run preprocessors
         if self._has_processors(PRE_LOAD):
             try:
                 processed_data = self._invoke_load_processors(
@@ -579,6 +598,7 @@ class BaseSchema(base.SchemaABC):
         else:
             processed_data = data
         if not errors:
+            # Deserialize data
             result = unmarshal(
                 processed_data,
                 self.fields,
@@ -588,11 +608,11 @@ class BaseSchema(base.SchemaABC):
                 dict_class=self.dict_class,
                 index_errors=self.opts.index_errors,
             )
+            # Run field-level validation
             self._invoke_field_validators(unmarshal, data=result, many=many)
-            errors = unmarshal.errors
-            # Run schema-level validation.
+            # Run schema-level validation
             if self._has_processors(VALIDATES_SCHEMA):
-                field_errors = bool(errors)
+                field_errors = bool(unmarshal.errors)
                 self._invoke_schema_validators(
                     unmarshal,
                     pass_many=True,
@@ -609,21 +629,21 @@ class BaseSchema(base.SchemaABC):
                     many=many,
                     field_errors=field_errors,
                 )
-        # Run post processors
-        if not errors and postprocess and self._has_processors(POST_LOAD):
-            try:
-                result = self._invoke_load_processors(
-                    POST_LOAD,
-                    result,
-                    many,
-                    original_data=data,
-                )
-            except ValidationError as err:
-                errors = err.normalized_messages()
+            errors = unmarshal.errors
+            # Run post processors
+            if not errors and postprocess and self._has_processors(POST_LOAD):
+                try:
+                    result = self._invoke_load_processors(
+                        POST_LOAD,
+                        result,
+                        many,
+                        original_data=data,
+                    )
+                except ValidationError as err:
+                    errors = err.normalized_messages()
         if errors:
             exc = ValidationError(
                 errors,
-                field_names=unmarshal.error_field_names,
                 data=data,
                 valid_data=result,
                 **unmarshal.error_kwargs
@@ -719,14 +739,24 @@ class BaseSchema(base.SchemaABC):
         ]
         if len(dump_data_keys) != len(set(dump_data_keys)):
             data_keys_duplicates = {x for x in dump_data_keys if dump_data_keys.count(x) > 1}
-            raise ValueError('Duplicate data_keys: {}'.format(data_keys_duplicates))
+            raise ValueError(
+                'The data_key argument for one or more fields collides '
+                "with another field's name or data_key argument. "
+                'Check the following field names and '
+                'data_key arguments: {}'.format(list(data_keys_duplicates)),
+            )
 
         load_attributes = [
             obj.attribute or name for name, obj in iteritems(fields_dict) if not obj.dump_only
         ]
         if len(load_attributes) != len(set(load_attributes)):
             attributes_duplicates = {x for x in load_attributes if load_attributes.count(x) > 1}
-            raise ValueError('Duplicate attributes: {}'.format(attributes_duplicates))
+            raise ValueError(
+                'The attribute argument for one or more fields collides '
+                "with another field's name or attribute argument. "
+                'Check the following field names and '
+                'attribute arguments: {}'.format(list(attributes_duplicates)),
+            )
 
         return fields_dict
 
@@ -845,11 +875,9 @@ class BaseSchema(base.SchemaABC):
         for attr_name in self._hooks[(VALIDATES_SCHEMA, pass_many)]:
             validator = getattr(self, attr_name)
             validator_kwargs = validator.__marshmallow_hook__[(VALIDATES_SCHEMA, pass_many)]
-            pass_original = validator_kwargs.get('pass_original', False)
-
-            skip_on_field_errors = validator_kwargs['skip_on_field_errors']
-            if skip_on_field_errors and field_errors:
+            if field_errors and validator_kwargs['skip_on_field_errors']:
                 continue
+            pass_original = validator_kwargs.get('pass_original', False)
 
             if pass_many:
                 validator = functools.partial(validator, many=many)

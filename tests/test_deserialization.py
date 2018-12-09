@@ -561,12 +561,13 @@ class TestFieldDeserialization:
             field.deserialize(in_value)
         assert excinfo.value.args[0] == 'Not a valid period of time.'
 
-    def test_date_field_deserialization(self):
-        field = fields.Date()
+    @pytest.mark.parametrize('format', (None, '%Y-%m-%d'))
+    def test_date_field_deserialization(self, format):
+        field = fields.Date(format=format)
         d = dt.date(2014, 8, 21)
         iso_date = d.isoformat()
         result = field.deserialize(iso_date)
-        assert isinstance(result, dt.date)
+        assert type(result) == dt.date
         assert_date_equal(result, d)
 
     @pytest.mark.parametrize(
@@ -1494,16 +1495,18 @@ class TestSchemaDeserialization:
 
     def test_dump_only_fields_considered_unknown(self):
         class MySchema(Schema):
-            foo = fields.Field(dump_only=True)
-
-            class Meta:
-                unknown = RAISE
+            foo = fields.Int(dump_only=True)
 
         with pytest.raises(ValidationError) as excinfo:
             MySchema().load({'foo': 42})
         err = excinfo.value
         assert 'foo' in err.messages
         assert err.messages['foo'] == ['Unknown field.']
+
+        # When unknown = INCLUDE, dump-only fields are included as unknown
+        # without any validation.
+        data = MySchema(unknown=INCLUDE).load({'foo': 'LOL'})
+        assert data['foo'] == 'LOL'
 
 
 validators_gen = (func for func in [lambda x: x <= 24, lambda x: 18 <= x])
@@ -1637,6 +1640,80 @@ class TestValidation:
         assert 'equal' in errors
         assert errors['equal'] == ['Must be equal to False.']
 
+    def test_nested_partial_load(self):
+        class SchemaA(Schema):
+            x = fields.Integer(required=True)
+            y = fields.Integer()
+
+        class SchemaB(Schema):
+            z = fields.Nested(SchemaA)
+
+        b_dict = {
+            'z': {
+                'y': 42,
+            },
+        }
+        # Partial loading shouldn't generate any errors.
+        result = SchemaB().load(b_dict, partial=True)
+        assert result['z']['y'] == 42
+        # Non partial loading should complain about missing values.
+        with pytest.raises(ValidationError) as excinfo:
+            SchemaB().load(b_dict)
+        data, errors = excinfo.value.valid_data, excinfo.value.messages
+        assert data['z']['y'] == 42
+        assert 'z' in errors
+        assert 'x' in errors['z']
+
+    def test_deeply_nested_partial_load(self):
+        class SchemaC(Schema):
+            x = fields.Integer(required=True)
+            y = fields.Integer()
+
+        class SchemaB(Schema):
+            c = fields.Nested(SchemaC)
+
+        class SchemaA(Schema):
+            b = fields.Nested(SchemaB)
+
+        a_dict = {
+            'b': {
+                'c': {
+                    'y': 42,
+                },
+            },
+        }
+        # Partial loading shouldn't generate any errors.
+        result = SchemaA().load(a_dict, partial=True)
+        assert result['b']['c']['y'] == 42
+        # Non partial loading should complain about missing values.
+        with pytest.raises(ValidationError) as excinfo:
+            SchemaA().load(a_dict)
+        data, errors = excinfo.value.valid_data, excinfo.value.messages
+        assert data['b']['c']['y'] == 42
+        assert 'b' in errors
+        assert 'c' in errors['b']
+        assert 'x' in errors['b']['c']
+
+    def test_nested_partial_tuple(self):
+        class SchemaA(Schema):
+            x = fields.Integer(required=True)
+            y = fields.Integer(required=True)
+
+        class SchemaB(Schema):
+            z = fields.Nested(SchemaA)
+
+        b_dict = {
+            'z': {
+                'y': 42,
+            },
+        }
+        # If we ignore the missing z.x, z.y should still load.
+        result = SchemaB().load(b_dict, partial=('z.x',))
+        assert result['z']['y'] == 42
+        # If we ignore a missing z.y we should get a validation error.
+        with pytest.raises(ValidationError):
+            SchemaB().load(b_dict, partial=('z.y',))
+
 
 FIELDS_TO_TEST = [f for f in ALL_FIELDS if f not in [fields.FormattedString]]
 @pytest.mark.parametrize('FieldClass', FIELDS_TO_TEST)
@@ -1678,4 +1755,4 @@ def test_deserialize_raises_exception_if_input_type_is_incorrect(data, unknown):
         MySchema(unknown=unknown).load(data)
     assert 'Invalid input type.' in str(excinfo)
     exc = excinfo.value
-    assert exc.field_names == ['_schema']
+    assert list(exc.messages.keys()) == ['_schema']

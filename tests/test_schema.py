@@ -28,7 +28,6 @@ from tests.base import (
     UserExcludeSchema,
     UserAdditionalSchema,
     BlogSchemaExclude,
-    BlogSchemaPrefixedUser,
     BlogSchemaMeta,
     User,
     mockjson,
@@ -79,7 +78,7 @@ def test_dump_mode_raises_error(SchemaClass):
     with pytest.raises(ValidationError) as excinfo:
         s.dump(bad_user)
     exc = excinfo.value
-    assert exc.field_names[0] == 'balance'
+    assert list(exc.messages.keys()) == ['balance']
 
     assert type(exc.messages) == dict
     assert exc.messages == {'balance': ['Not a valid number.']}
@@ -169,12 +168,12 @@ def test_dump_resets_error_fields():
     with pytest.raises(ValidationError) as excinfo:
         schema.dump(User('Joe', age='dummy'))
     exc = excinfo.value
-    assert len(exc.field_names) == 1
+    assert len(exc.messages.keys()) == 1
 
     with pytest.raises(ValidationError) as excinfo:
         schema.dump(User('Joe', age='__dummy'))
-
-    assert len(exc.field_names) == 1
+    exc = excinfo.value
+    assert len(exc.messages.keys()) == 1
 
 def test_load_resets_error_fields():
     class MySchema(Schema):
@@ -185,12 +184,12 @@ def test_load_resets_error_fields():
     with pytest.raises(ValidationError) as excinfo:
         schema.load({'name': 'Joe', 'email': 'not-valid'})
     exc = excinfo.value
-    assert len(exc.field_names) == 1
+    assert len(exc.messages.keys()) == 1
 
     with pytest.raises(ValidationError) as excinfo:
         schema.load({'name': 12, 'email': 'mick@stones.com'})
     exc = excinfo.value
-    assert len(exc.field_names) == 1
+    assert len(exc.messages.keys()) == 1
 
 def test_load_resets_error_kwargs():
     class MySchema(Schema):
@@ -650,14 +649,6 @@ def test_method_field(SchemaClass, serialized_user):
 
 def test_function_field(serialized_user, user):
     assert serialized_user['lowername'] == user.name.lower()
-
-@pytest.mark.parametrize(
-    'SchemaClass',
-    [UserSchema, UserMetaSchema],
-)
-def test_prefix(SchemaClass, user):
-    s = SchemaClass(prefix='usr_').dump(user)
-    assert s['usr_name'] == user.name
 
 def test_fields_must_be_declared_as_instances(user):
     class BadUserSchema(Schema):
@@ -1661,7 +1652,7 @@ class TestHandleError:
             def handle_error(self, error, data):
                 assert type(error) is ValidationError
                 assert 'email' in error.messages
-                assert error.field_names == ['email']
+                assert list(error.messages.keys()) == ['email']
                 assert data == in_data
                 raise CustomError('Something bad happened')
 
@@ -1678,7 +1669,7 @@ class TestHandleError:
             def handle_error(self, error, data):
                 assert type(error) is ValidationError
                 assert 'email' in error.messages
-                assert error.field_names == ['email']
+                assert list(error.messages.keys()) == ['email']
                 assert data == in_data
                 raise CustomError('Something bad happened')
 
@@ -1699,7 +1690,7 @@ class TestHandleError:
             def handle_error(self, error, data):
                 assert type(error) is ValidationError
                 assert 'num' in error.messages
-                assert error.field_names == ['num']
+                assert list(error.messages.keys()) == ['num']
                 assert data == in_data
                 raise CustomError('Something bad happened')
 
@@ -1718,8 +1709,7 @@ class TestHandleError:
 
             def handle_error(self, error, data):
                 assert type(error) is ValidationError
-                assert '_schema' in error.messages
-                assert error.field_names == ['_schema']
+                assert list(error.messages.keys()) == ['_schema']
                 assert data == in_data
                 raise CustomError('Something bad happened')
 
@@ -1963,15 +1953,6 @@ class TestNestedSchema:
         expected = blog.collaborators[0].name.lower()
         assert data['collaborators'][0]['lowername'] == expected
 
-    def test_nested_prefixed_field(self, blog, user):
-        data = BlogSchemaPrefixedUser().dump(blog)
-        assert data['user']['usr_name'] == user.name
-        assert data['user']['usr_lowername'] == user.name.lower()
-
-    def test_nested_prefixed_many_field(self, blog):
-        data = BlogSchemaPrefixedUser().dump(blog)
-        assert data['collaborators'][0]['usr_name'] == blog.collaborators[0].name
-
     def test_invalid_float_field(self):
         user = User('Joe', age='1b2')
         with pytest.raises(ValidationError) as excinfo:
@@ -2041,7 +2022,7 @@ class TestNestedSchema:
             outer.load({'inner': [{}]})
         errors = excinfo.value.messages
         assert 'inner' in errors
-        assert '_field' in errors['inner']
+        assert '_schema' in errors['inner']
 
     def test_dump_validation_error(self):
         class Child(object):
@@ -2096,16 +2077,6 @@ class TestNestedSchema:
 
 class TestPluckSchema:
 
-    def blog(self):
-        user = User(name='Monty', age=81)
-        col1 = User(name='Mick', age=123)
-        col2 = User(name='Keith', age=456)
-        blog = Blog(
-            user=user, categories=['humor', 'violence'],
-            collaborators=[col1, col2],
-        )
-        return blog
-
     def test_pluck(self, blog):
         class FlatBlogSchema(Schema):
             user = fields.Pluck(UserSchema, 'name')
@@ -2113,6 +2084,19 @@ class TestPluckSchema:
         s = FlatBlogSchema()
         data = s.dump(blog)
         assert data['user'] == blog.user.name
+        for i, name in enumerate(data['collaborators']):
+            assert name == blog.collaborators[i].name
+
+    def test_pluck_none(self, blog):
+        class FlatBlogSchema(Schema):
+            user = fields.Pluck(UserSchema, 'name')
+            collaborators = fields.Pluck(UserSchema, 'name', many=True)
+        col1 = User(name='Mick', age=123)
+        col2 = User(name='Keith', age=456)
+        blog = Blog(title='Unowned Blog', user=None, collaborators=[col1, col2])
+        s = FlatBlogSchema()
+        data = s.dump(blog)
+        assert data['user'] == blog.user
         for i, name in enumerate(data['collaborators']):
             assert name == blog.collaborators[i].name
 
@@ -2130,6 +2114,10 @@ class TestPluckSchema:
         assert data['user'] == blog.user.name
         for i, name in enumerate(data['collaborators']):
             assert name == blog.collaborators[i].name
+        assert s.load(data) == {
+            'user': {'name': 'Monty'},
+            'collaborators': [{'name': 'Mick'}, {'name': 'Keith'}],
+        }
 
 
 class TestSelfReference:

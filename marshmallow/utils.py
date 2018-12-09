@@ -17,6 +17,7 @@ from email.utils import formatdate, parsedate
 from pprint import pprint as py_pprint
 
 from marshmallow.compat import binary_type, text_type
+from marshmallow.compat import Mapping, Iterable
 
 EXCLUDE = 'exclude'
 INCLUDE = 'include'
@@ -55,7 +56,7 @@ def is_generator(obj):
 def is_iterable_but_not_string(obj):
     """Return True if ``obj`` is an iterable object that isn't a string."""
     return (
-        (isinstance(obj, collections.Iterable) and not hasattr(obj, 'strip')) or is_generator(obj)
+        (isinstance(obj, Iterable) and not hasattr(obj, 'strip')) or is_generator(obj)
     )
 
 
@@ -66,7 +67,7 @@ def is_indexable_but_not_string(obj):
 
 def is_collection(obj):
     """Return True if ``obj`` is a collection type, e.g list, tuple, queryset."""
-    return is_iterable_but_not_string(obj) and not isinstance(obj, collections.Mapping)
+    return is_iterable_but_not_string(obj) and not isinstance(obj, Mapping)
 
 
 def is_instance_or_subclass(val, class_):
@@ -361,12 +362,13 @@ def _get_value_for_keys(obj, keys, default):
 
 
 def _get_value_for_key(obj, key, default):
+    if not hasattr(obj, '__getitem__'):
+        return getattr(obj, key, default)
+
     try:
         return obj[key]
-    except (TypeError, AttributeError, NotImplementedError):
+    except (KeyError, IndexError, TypeError, AttributeError, NotImplementedError):
         return getattr(obj, key, default)
-    except (KeyError, IndexError):
-        return default
 
 
 def set_value(dct, key, value):
@@ -391,6 +393,7 @@ def set_value(dct, key, value):
         set_value(target, rest, value)
     else:
         dct[key] = value
+
 
 def callable_or_raise(obj):
     """Check that an object is callable, else raise a :exc:`ValueError`.

@@ -1,7 +1,68 @@
 Changelog
 ---------
 
-3.0.0b17 (unreleased)
+3.0.0rc2 (unreleased)
++++++++++++++++++++++
+
+Bug fixes:
+
+- Fix serializing dict-like objects with properties (:issue:`1060`).
+  Thanks :user:`taion` for the fix.
+
+3.0.0rc1 (2018-11-29)
++++++++++++++++++++++
+
+Features:
+
+- *Backwards-incompatible*: Rework ``ValidationError`` API.
+  It now expects a single field name, and error structures are merged
+  in the final ``ValidationError`` raised when validation completes.
+  This allows schema-level validators to raise errors for individual
+  fields (:issue:`441`). Thanks :user:`maximkulkin` for
+  writing the original ``merge_errors`` implementation in :pr:`442` and thanks
+  :user:`lafrech` for completing the implementation in :pr:`1026`.
+
+Bug fixes:
+
+- Fix ``TypeError`` when serializing ``None`` with ``Pluck`` (:pr:`1049`).
+  Thanks :user:`toffan` for the catch and patch.
+
+3.0.0b20 (2018-11-01)
++++++++++++++++++++++
+
+Bug fixes:
+
+- Includes bug fixes from 2.16.2 and 2.16.3.
+
+3.0.0b19 (2018-10-24)
++++++++++++++++++++++
+
+Features:
+
+- Support partial loading of nested fields (:pr:`438`). Thanks
+  :user:`arbor-dwatson` for the PR. *Note*: Subclasses of ``fields.Nested``
+  now take an additional ``partial`` parameter in the ``_deserialize``
+  method.
+
+Bug fixes:
+
+- Restore ``Schema.TYPE_MAPPING``, which was removed in 3.0.0b17 (:issue:`1012`).
+
+3.0.0b18 (2018-10-15)
++++++++++++++++++++++
+
+Bug fixes:
+
+- Fix ``Date`` deserialization when using custom format (:issue:`1001`). Thanks
+  :user:`Ondkloss` for reporting.
+
+Deprecations/Removals:
+
+- ``prefix`` parameter or ``Schema`` class is removed (:issue:`991`). The same
+  can be achieved using a ``@post_dump`` method.
+
+
+3.0.0b17 (2018-10-13)
 +++++++++++++++++++++
 
 Features:
@@ -22,8 +83,8 @@ Bug fixes:
 - When ``unknown`` is not passed to ``Nested``, default to nested ``Schema``
   ``unknown`` meta option rather than ``RAISE`` (:pr:`963`).
   Thanks :user:`vgavro` for the PR.
+- Fix loading behavior of ``fields.Pluck`` (:pr:`990`).
 - Includes bug fix from 2.16.0.
-
 
 3.0.0b16 (2018-09-20)
 +++++++++++++++++++++
@@ -41,7 +102,7 @@ Bug fixes:
 
 - Raise ``ValidationError`` instead of ``TypeError`` when non-iterable types are
   validated with ``many=True`` (:issue:`851`).
-- ``many=True`` no longer iterates over ``str`` and ``collections.Mapping`` objects and instead
+- ``many=True`` no longer iterates over ``str`` and ``collections.abc.Mapping`` objects and instead
   raises a ``ValidationError`` with ``{'_schema': ['Invalid input type.']}`` (:issue:`930`).
 - Return ``[]`` as ``ValidationError.valid_data`` instead of ``{}`` when
   ``many=True`` (:issue:`907`).
@@ -339,6 +400,32 @@ Deprecation/Removals:
 - Remove ``__error_handler__``, ``__accessor__``, ``@Schema.error_handler``, and ``@Schema.accessor``. Override ``Schema.handle_error`` and ``Schema.get_attribute`` instead.
 - Remove ``func`` parameter of ``fields.Function``. Remove ``method_name`` parameter of ``fields.Method`` (issue:`325`). Use the ``serialize`` parameter instead.
 - Remove ``extra`` parameter from ``Schema``. Use a ``@post_dump`` method to add additional data.
+
+2.16.3 (2018-11-01)
++++++++++++++++++++
+
+Bug fixes:
+
+- Prevent memory leak when dynamically creating classes with ``type()``
+  (:issue:`732`). Thanks :user:`asmodehn` for writing the tests to
+  reproduce this issue.
+
+2.16.2 (2018-10-30)
++++++++++++++++++++
+
+Bug fixes:
+
+- Prevent warning about importing from ``collections`` on Python 3.7
+  (:issue:`1027`). Thanks :user:`nkonin` for reporting and
+  :user:`jmargeta` for the PR.
+
+2.16.1 (2018-10-17)
++++++++++++++++++++
+
+Bug fixes:
+
+- Remove spurious warning about implicit collection handling
+  (:issue:`998`). Thanks :user:`lalvarezguillen` for reporting.
 
 2.16.0 (2018-10-10)
 +++++++++++++++++++

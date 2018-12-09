@@ -146,6 +146,55 @@ them from ``schema.fields``.
         field = schema.fields['foo']
         # ...
 
+
+``ValidationError`` expects a single field name
+***********************************************
+
+:exc:`ValidationError <marshmallow.exceptions.ValidationError>` no
+longer accepts a list of field names. It expects a single field name. If none
+is passed, the error refers to the schema.
+
+To return an error for several fields at once, a `dict` must be used.
+
+.. code-block:: python
+
+    from marshmallow import Schema, fields, validates_schema, ValidationError
+
+    class NumberSchema(Schema):
+        field_a = fields.Integer()
+        field_b = fields.Integer()
+
+        # 2.x
+        @validates_schema
+        def validate_numbers(self, data):
+            if data['field_b'] >= data['field_a']:
+                raise ValidationError(
+                    'field_a must be greater than field_b',
+                    ['field_a', 'field_b']
+                )
+
+        # 3.x
+        @validates_schema
+        def validate_numbers(self, data):
+            if data['field_b'] >= data['field_a']:
+                raise ValidationError({
+                    'field_a': ['field_a must be greater than field_b']
+                    'field_b': ['field_a must be greater than field_b']
+                })
+
+``ValidationError`` error messages are deep-merged
+**************************************************
+
+When multiple :exc:`ValidationError <marshmallow.exceptions.ValidationError>`
+are raised, the error structures are merged in the final :exc:`ValidationError`
+raised at the end of the process.
+
+When reporting error messages as `dict`, the keys should refer to subitems
+of the item the message refers to, and the values should be error messages.
+
+See the "Schema-level Validation" section of :doc:`Extending Schemas <extending>`
+page for an example.
+
 Schemas raise ``ValidationError`` when deserializing data with unknown keys
 ***************************************************************************
 
@@ -666,6 +715,34 @@ The ``Meta`` option ``dateformat`` used to pass format to `DateTime <marshmallow
 
     MySchema().dump({'x': dt.datetime(2017, 9, 19), 'y': dt.date(2017, 9, 19)})
     # => {{'x': '2017-09', 'y': '09-19'}}
+
+The ``prefix`` ``Schema`` parameter is removed
+**********************************************
+
+The ``prefix`` parameter of ``Schema`` is removed. The same feature can be achieved using a post_dump <marshmallow.decorators.post_dump>` method.
+
+
+.. code-block:: python
+
+    # 2.x
+    class MySchema(Schema):
+        f1 = fields.Field()
+        f2 = fields.Field()
+
+    MySchema(prefix='pre_').dump({'f1': 'one', 'f2': 'two'})
+    # {'pre_f1': 'one', '_pre_f2': 'two'}
+
+    # 3.x
+    class MySchema(Schema):
+        f1 = fields.Field()
+        f2 = fields.Field()
+
+        @post_dump
+        def prefix_usr(self, data):
+            return {'usr_{}'.format(k): v for k, v in iteritems(data)}
+
+    MySchema().dump({'f1': 'one', 'f2': 'two'})
+    # {'pre_f1': 'one', '_pre_f2': 'two'}
 
 ``attribute`` or ``data_key`` collision triggers an exception
 *************************************************************

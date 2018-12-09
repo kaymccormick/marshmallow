@@ -202,7 +202,7 @@ When validating a collection, the errors dictionary will be keyed on the indices
 You can perform additional validation for a field by passing it a ``validate`` callable (function, lambda, or object with ``__call__`` defined).
 
 .. code-block:: python
-    :emphasize-lines: 4
+    :emphasize-lines: 6
 
     from marshmallow import ValidationError
 
@@ -218,7 +218,7 @@ You can perform additional validation for a field by passing it a ``validate`` c
         err.messages  # => {'age': ['Validator <lambda>(71.0) is False']}
 
 
-Validation functions either return a boolean or raise a :exc:`ValidationError`. If a :exc:`ValidationError <marshmallow.exceptions.ValidationError>` is raised, its message is stored when validation fails.
+If validation fails, validation functions raise a :exc:`ValidationError <marshmallow.exceptions.ValidationError>` with an error message.
 
 .. code-block:: python
     :emphasize-lines: 7,10,14
@@ -342,7 +342,7 @@ Or you can ignore missing fields entirely by setting ``partial=True``.
 Handling Unknown Fields
 +++++++++++++++++++++++
 
-By default, :meth:`load <Schema.load>` will raise a :exc:`ValidationError <marshmallow.exceptions.ValidationError>` if it encounters a field that has not been defined in the schema.
+By default, :meth:`load <Schema.load>` will raise a :exc:`ValidationError <marshmallow.exceptions.ValidationError>` if it encounters a key with no matching ``Field`` in the schema.
 
 This behavior can be modified with the ``unknown`` option, which accepts one of the following:
 
@@ -521,6 +521,10 @@ In the context of a web API, the ``dump_only`` and ``load_only`` parameters are 
         # created_at is "read-only"
         created_at = fields.DateTime(dump_only=True)
 
+.. warning::
+
+    When loading, dump_only fields are considered unknown. If the ``unknown`` option is set to ``INCLUDE``, values with keys corresponding to those fields are therefore loaded with no validation.
+
 
 Specify Default Serialization/Deserialization Values
 ----------------------------------------------------
@@ -544,7 +548,7 @@ Default values can be provided to a :class:`Field <fields.Field>` for both seria
 Next Steps
 ----------
 
-- Need to represent relationships between objects? See the :ref:`Nesting Schemas <nesting>` page.
-- Want to create your own field type? See the :ref:`Custom Fields <custom_fields>` page.
+- Need to represent relationships between objects? See the :doc:`Nesting Schemas <nesting>` page.
+- Want to create your own field type? See the :doc:`Custom Fields <custom_fields>` page.
 - Need to add schema-level validation, post-processing, or error handling behavior? See the :doc:`Extending Schemas <extending>` page.
-- For example applications using marshmallow, check out the :ref:`Examples <examples>` page.
+- For example applications using marshmallow, check out the :doc:`Examples <examples>` page.

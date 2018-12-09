@@ -14,7 +14,7 @@ import math
 from marshmallow import validate, utils, class_registry
 from marshmallow.base import FieldABC, SchemaABC
 from marshmallow.utils import is_collection, missing as missing_
-from marshmallow.compat import basestring, binary_type, text_type
+from marshmallow.compat import basestring, text_type, Mapping
 from marshmallow.exceptions import ValidationError, StringNotCollectionError
 from marshmallow.validate import Validator
 
@@ -240,13 +240,14 @@ class Field(FieldABC):
             if hasattr(self, 'allow_none') and self.allow_none is not True:
                 self.fail('null')
 
-    def serialize(self, attr, obj, accessor=None):
+    def serialize(self, attr, obj, accessor=None, **kwargs):
         """Pulls the value for the given key from the object, applies the
         field's formatting and returns the result.
 
         :param str attr: The attribute or key to get from the object.
         :param str obj: The object to pull the key from.
         :param callable accessor: Function used to pull values from ``obj``.
+        :param dict kwargs': Field-specific keyword arguments.
         :raise ValidationError: In case of formatting problem
         """
         if self._CHECK_ATTRIBUTE:
@@ -258,11 +259,15 @@ class Field(FieldABC):
                 return value
         else:
             value = None
-        return self._serialize(value, attr, obj)
+        return self._serialize(value, attr, obj, **kwargs)
 
-    def deserialize(self, value, attr=None, data=None):
+    def deserialize(self, value, attr=None, data=None, **kwargs):
         """Deserialize ``value``.
 
+        :param value: The value to be deserialized.
+        :param str attr: The attribute/key in `data` to be deserialized.
+        :param dict data: The raw input data passed to the `Schema.load`.
+        :param dict kwargs': Field-specific keyword arguments.
         :raise ValidationError: If an invalid value is passed or if a required value
             is missing.
         """
@@ -274,7 +279,7 @@ class Field(FieldABC):
             return _miss() if callable(_miss) else _miss
         if getattr(self, 'allow_none', False) is True and value is None:
             return None
-        output = self._deserialize(value, attr, data)
+        output = self._deserialize(value, attr, data, **kwargs)
         self._validate(output)
         return output
 
@@ -290,14 +295,14 @@ class Field(FieldABC):
         self.parent = self.parent or schema
         self.name = self.name or field_name
 
-    def _serialize(self, value, attr, obj):
+    def _serialize(self, value, attr, obj, **kwargs):
         """Serializes ``value`` to a basic Python datatype. Noop by default.
         Concrete :class:`Field` classes should implement this method.
 
         Example: ::
 
             class TitleCase(Field):
-                def _serialize(self, value, attr, obj):
+                def _serialize(self, value, attr, obj, **kwargs):
                     if not value:
                         return ''
                     return unicode(value).title()
@@ -305,19 +310,24 @@ class Field(FieldABC):
         :param value: The value to be serialized.
         :param str attr: The attribute or key on the object to be serialized.
         :param object obj: The object the value was pulled from.
+        :param dict kwargs': Field-specific keyword arguments.
         :raise ValidationError: In case of formatting or validation failure.
         :return: The serialized value
         """
         return value
 
-    def _deserialize(self, value, attr, data):
+    def _deserialize(self, value, attr, data, **kwargs):
         """Deserialize value. Concrete :class:`Field` classes should implement this method.
 
         :param value: The value to be deserialized.
         :param str attr: The attribute/key in `data` to be deserialized.
         :param dict data: The raw input data passed to the `Schema.load`.
+        :param dict kwargs': Field-specific keyword arguments.
         :raise ValidationError: In case of formatting or validation failure.
         :return: The deserialized value.
+
+        .. versionchanged:: 3.0.0
+            Add ``**kwargs`` parameters
 
         .. versionchanged:: 2.0.0
             Added ``attr`` and ``data`` parameters.
@@ -443,7 +453,7 @@ class Nested(Field):
                 for field in getattr(self.root, option_name, set())
                 if field.startswith(nested_field)]
 
-    def _serialize(self, nested_obj, attr, obj):
+    def _serialize(self, nested_obj, attr, obj, **kwargs):
         # Load up the schema first. This allows a RegistryError to be raised
         # if an invalid schema name was passed
         schema = self.schema
@@ -452,22 +462,33 @@ class Nested(Field):
         try:
             return schema.dump(nested_obj, many=self.many)
         except ValidationError as exc:
-            raise ValidationError(exc.messages, data=obj, valid_data=exc.valid_data)
+            raise ValidationError(exc.messages, valid_data=exc.valid_data)
 
     def _test_collection(self, value):
         if self.many and not utils.is_collection(value):
             self.fail('type', input=value, type=value.__class__.__name__)
 
-    def _load(self, value, data):
+    def _load(self, value, data, partial=None):
         try:
-            valid_data = self.schema.load(value, unknown=self.unknown)
+            valid_data = self.schema.load(
+                value, unknown=self.unknown,
+                partial=partial,
+            )
         except ValidationError as exc:
-            raise ValidationError(exc.messages, data=data, valid_data=exc.valid_data)
+            raise ValidationError(exc.messages, valid_data=exc.valid_data)
         return valid_data
 
-    def _deserialize(self, value, attr, data):
+    def _deserialize(self, value, attr, data, partial=None, **kwargs):
+        """Same as :meth:`Field._deserialize` with additional ``partial`` argument.
+
+        :param bool|tuple partial: For nested schemas, the ``partial``
+            parameter passed to `Schema.load`.
+
+        .. versionchanged:: 3.0.0
+            Add ``partial`` parameter
+        """
         self._test_collection(value)
-        return self._load(value, data)
+        return self._load(value, data, partial=partial)
 
 
 class Pluck(Nested):
@@ -488,23 +509,26 @@ class Pluck(Nested):
         super(Pluck, self).__init__(nested, only=(field_name,), **kwargs)
         self.field_name = field_name
 
-    def _serialize(self, nested_obj, attr, obj):
-        ret = super(Pluck, self)._serialize(nested_obj, attr, obj)
+    @property
+    def _field_data_key(self):
         only_field = self.schema.fields[self.field_name]
-        data_key = only_field.data_key or self.field_name
-        key = ''.join([self.schema.prefix or '', data_key])
-        if self.many:
-            return utils.pluck(ret, key=key)
-        else:
-            return ret[key]
+        return only_field.data_key or self.field_name
 
-    def _deserialize(self, value, attr, data):
+    def _serialize(self, nested_obj, attr, obj, **kwargs):
+        ret = super(Pluck, self)._serialize(nested_obj, attr, obj, **kwargs)
+        if ret is None:
+            return None
+        if self.many:
+            return utils.pluck(ret, key=self._field_data_key)
+        return ret[self._field_data_key]
+
+    def _deserialize(self, value, attr, data, partial=None, **kwargs):
         self._test_collection(value)
         if self.many:
-            value = [{self.field_name: v} for v in value]
+            value = [{self._field_data_key: v} for v in value]
         else:
-            value = {self.field_name: value}
-        return self._load(value, data)
+            value = {self._field_data_key: value}
+        return self._load(value, data, partial=partial)
 
 
 class List(Field):
@@ -564,14 +588,14 @@ class List(Field):
         self.container.parent = self
         self.container.name = field_name
 
-    def _serialize(self, value, attr, obj):
+    def _serialize(self, value, attr, obj, **kwargs):
         if value is None:
             return None
         if utils.is_collection(value):
-            return [self.container._serialize(each, attr, obj) for each in value]
-        return [self.container._serialize(value, attr, obj)]
+            return [self.container._serialize(each, attr, obj, **kwargs) for each in value]
+        return [self.container._serialize(value, attr, obj, **kwargs)]
 
-    def _deserialize(self, value, attr, data):
+    def _deserialize(self, value, attr, data, **kwargs):
         if not utils.is_collection(value):
             self.fail('invalid')
 
@@ -601,12 +625,12 @@ class String(Field):
         'invalid_utf8': 'Not a valid utf-8 string.',
     }
 
-    def _serialize(self, value, attr, obj):
+    def _serialize(self, value, attr, obj, **kwargs):
         if value is None:
             return None
         return utils.ensure_text_type(value)
 
-    def _deserialize(self, value, attr, data):
+    def _deserialize(self, value, attr, data, **kwargs):
         if not isinstance(value, basestring):
             self.fail('invalid')
         try:
@@ -635,11 +659,11 @@ class UUID(String):
         except (ValueError, AttributeError, TypeError):
             self.fail('invalid_uuid')
 
-    def _serialize(self, value, attr, obj):
+    def _serialize(self, value, attr, obj, **kwargs):
         validated = str(self._validated(value)) if value is not None else None
-        return super(String, self)._serialize(validated, attr, obj)
+        return super(String, self)._serialize(validated, attr, obj, **kwargs)
 
-    def _deserialize(self, value, attr, data):
+    def _deserialize(self, value, attr, data, **kwargs):
         return self._validated(value)
 
 
@@ -678,12 +702,12 @@ class Number(Field):
     def _to_string(self, value):
         return str(value)
 
-    def _serialize(self, value, attr, obj):
+    def _serialize(self, value, attr, obj, **kwargs):
         """Return a string if `self.as_string=True`, otherwise return this field's `num_type`."""
         ret = self._validated(value)
         return self._to_string(ret) if (self.as_string and ret not in (None, missing_)) else ret
 
-    def _deserialize(self, value, attr, data):
+    def _deserialize(self, value, attr, data, **kwargs):
         return self._validated(value)
 
 
@@ -855,7 +879,7 @@ class Boolean(Field):
         if falsy is not None:
             self.falsy = set(falsy)
 
-    def _serialize(self, value, attr, obj):
+    def _serialize(self, value, attr, obj, **kwargs):
         if value is None:
             return None
         elif value in self.truthy:
@@ -865,7 +889,7 @@ class Boolean(Field):
 
         return bool(value)
 
-    def _deserialize(self, value, attr, data):
+    def _deserialize(self, value, attr, data, **kwargs):
         if not self.truthy:
             return bool(value)
         else:
@@ -902,7 +926,7 @@ class FormattedString(Field):
         Field.__init__(self, *args, **kwargs)
         self.src_str = text_type(src_str)
 
-    def _serialize(self, value, attr, obj):
+    def _serialize(self, value, attr, obj, **kwargs):
         try:
             data = utils.to_marshallable_type(obj)
             return self.src_str.format(**data)
@@ -967,7 +991,7 @@ class DateTime(Field):
             self.DEFAULT_FORMAT
         )
 
-    def _serialize(self, value, attr, obj):
+    def _serialize(self, value, attr, obj, **kwargs):
         if value is None:
             return None
         data_format = self.format or self.DEFAULT_FORMAT
@@ -980,14 +1004,7 @@ class DateTime(Field):
         else:
             return value.strftime(data_format)
 
-    def _create_data_object_from_parsed_value(self, parsed):
-        """Return a datetime from a parsed object that contains the needed info."""
-        return dt.datetime(
-            parsed.year, parsed.month, parsed.day, parsed.hour, parsed.minute,
-            parsed.second,
-        )
-
-    def _deserialize(self, value, attr, data):
+    def _deserialize(self, value, attr, data, **kwargs):
         if not value:  # Falsy values, e.g. '', None, [] are not valid
             raise self.fail('invalid', obj_type=self.OBJ_TYPE)
         data_format = self.format or self.DEFAULT_FORMAT
@@ -999,9 +1016,13 @@ class DateTime(Field):
                 raise self.fail('invalid', obj_type=self.OBJ_TYPE)
         else:
             try:
-                return dt.datetime.strptime(value, data_format)
+                return self._make_object_from_format(value, data_format)
             except (TypeError, AttributeError, ValueError):
                 raise self.fail('invalid', obj_type=self.OBJ_TYPE)
+
+    @staticmethod
+    def _make_object_from_format(value, data_format):
+        return dt.datetime.strptime(value, data_format)
 
 
 class LocalDateTime(DateTime):
@@ -1024,7 +1045,7 @@ class Time(Field):
         'format': '"{input}" cannot be formatted as a time.',
     }
 
-    def _serialize(self, value, attr, obj):
+    def _serialize(self, value, attr, obj, **kwargs):
         if value is None:
             return None
         try:
@@ -1035,7 +1056,7 @@ class Time(Field):
             return ret[:15]
         return ret
 
-    def _deserialize(self, value, attr, data):
+    def _deserialize(self, value, attr, data, **kwargs):
         """Deserialize an ISO8601-formatted time to a :class:`datetime.time` object."""
         if not value:   # falsy values are invalid
             self.fail('invalid')
@@ -1073,9 +1094,9 @@ class Date(DateTime):
 
     SCHEMA_OPTS_VAR_NAME = 'dateformat'
 
-    def _create_data_object_from_parsed_value(self, parsed):
-        """Return a date from a parsed object that contains the need information."""
-        return dt.date(parsed.year, parsed.month, parsed.day)
+    @staticmethod
+    def _make_object_from_format(value, data_format):
+        return dt.datetime.strptime(value, data_format).date()
 
 
 class TimeDelta(Field):
@@ -1123,7 +1144,7 @@ class TimeDelta(Field):
         self.precision = precision
         super(TimeDelta, self).__init__(error=error, **kwargs)
 
-    def _serialize(self, value, attr, obj):
+    def _serialize(self, value, attr, obj, **kwargs):
         if value is None:
             return None
         try:
@@ -1132,7 +1153,7 @@ class TimeDelta(Field):
         except AttributeError:
             self.fail('format', input=value)
 
-    def _deserialize(self, value, attr, data):
+    def _deserialize(self, value, attr, data, **kwargs):
         try:
             value = int(value)
         except (TypeError, ValueError):
@@ -1215,23 +1236,25 @@ class Dict(Field):
             self.key_container.parent = self
             self.key_container.name = field_name
 
-    def _serialize(self, value, attr, obj):
+    def _serialize(self, value, attr, obj, **kwargs):
         if value is None:
             return None
         if not self.value_container and not self.key_container:
             return value
-        if isinstance(value, collections.Mapping):
+        if isinstance(value, Mapping):
             values = value.values()
             if self.value_container:
-                values = [self.value_container._serialize(item, attr, obj) for item in values]
+                values = [
+                    self.value_container._serialize(item, attr, obj, **kwargs) for item in values
+                ]
             keys = value.keys()
             if self.key_container:
-                keys = [self.key_container._serialize(key, attr, obj) for key in keys]
+                keys = [self.key_container._serialize(key, attr, obj, **kwargs) for key in keys]
             return dict(zip(keys, values))
         self.fail('invalid')
 
-    def _deserialize(self, value, attr, data):
-        if not isinstance(value, collections.Mapping):
+    def _deserialize(self, value, attr, data, **kwargs):
+        if not isinstance(value, Mapping):
             self.fail('invalid')
         if not self.value_container and not self.key_container:
             return value
@@ -1350,7 +1373,7 @@ class Method(Field):
         self.serialize_method_name = serialize
         self.deserialize_method_name = deserialize
 
-    def _serialize(self, value, attr, obj):
+    def _serialize(self, value, attr, obj, **kwargs):
         if not self.serialize_method_name:
             return missing_
 
@@ -1359,7 +1382,7 @@ class Method(Field):
         )
         return method(obj)
 
-    def _deserialize(self, value, attr, data):
+    def _deserialize(self, value, attr, data, **kwargs):
         if self.deserialize_method_name:
             method = utils.callable_or_raise(
                 getattr(self.parent, self.deserialize_method_name, None),
@@ -1399,10 +1422,10 @@ class Function(Field):
         self.serialize_func = serialize and utils.callable_or_raise(serialize)
         self.deserialize_func = deserialize and utils.callable_or_raise(deserialize)
 
-    def _serialize(self, value, attr, obj):
+    def _serialize(self, value, attr, obj, **kwargs):
         return self._call_or_raise(self.serialize_func, obj, attr)
 
-    def _deserialize(self, value, attr, data):
+    def _deserialize(self, value, attr, data, **kwargs):
         if self.deserialize_func:
             return self._call_or_raise(self.deserialize_func, value, attr)
         return value
@@ -1450,31 +1473,14 @@ class Inferred(Field):
         Users should not need to use this class directly.
     """
 
-    TYPE_MAPPING = {
-        text_type: String,
-        binary_type: String,
-        dt.datetime: DateTime,
-        float: Float,
-        bool: Boolean,
-        tuple: Raw,
-        list: Raw,
-        set: Raw,
-        int: Integer,
-        uuid.UUID: UUID,
-        dt.time: Time,
-        dt.date: Date,
-        dt.timedelta: TimeDelta,
-        decimal.Decimal: Decimal,
-    }
-
     def __init__(self):
         super(Inferred, self).__init__()
         # We memoize the fields to avoid creating and binding new fields
         # every time on serialization.
         self._field_cache = {}
 
-    def _serialize(self, value, attr, obj):
-        field_cls = self.TYPE_MAPPING.get(type(value))
+    def _serialize(self, value, attr, obj, **kwargs):
+        field_cls = self.root.TYPE_MAPPING.get(type(value))
         if field_cls is None:
             field = super(Inferred, self)
         else:
@@ -1483,7 +1489,7 @@ class Inferred(Field):
                 field = field_cls()
                 field._bind_to_schema(self.name, self.parent)
                 self._field_cache[field_cls] = field
-        return field._serialize(value, attr, obj)
+        return field._serialize(value, attr, obj, **kwargs)
 
 
 # Aliases
